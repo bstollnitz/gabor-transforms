@@ -9,36 +9,18 @@ from scipy.io.wavfile import read
 
 import utils
 
-HANDEL_URL = 'https://bea-portfolio.s3-us-west-2.amazonaws.com/gabor-transforms/handel.wav'
+S3_URL = 'https://bea-portfolio.s3-us-west-2.amazonaws.com/gabor-transforms/'
 PLOTS_FOLDER = 'plots'
 COLOR1 = '#3F4F8C'
 
 
-def load_handel_music() -> np.ndarray:
+def plot_wav_data(sample_rate: float, data: np.ndarray, title: str, 
+    dirname: str, filename: str) -> None:
     """
-    Loads music by Handel.
-    """
-
-    # Load Handel music file.
-    handel_path = utils.download_remote_data_file(HANDEL_URL)
-    # sample_rate is measurements per second.
-    (sample_rate, handel_data) = read(handel_path)
-
-    # 65536 = 2^16. 
-    # Samples in a wav file have 16 bits, so we scale the amplitudes to be 
-    # between 0 and 1.
-    handel_data = handel_data/65536
-
-    return (sample_rate, handel_data)
-
-
-def plot_handel_data(sample_rate: float, data: np.ndarray, dirname: str, 
-    filename: str) -> None:
-    """
-    Plots the amplitude of the Handel music over time.
+    Plots the amplitude of the signal in a wav file.
     """
 
-    print(f'Plotting Handel music data...')
+    print(f'Plotting wav file data...')
 
     path = os.path.join(dirname, filename)
 
@@ -55,11 +37,59 @@ def plot_handel_data(sample_rate: float, data: np.ndarray, dirname: str,
         )
     )
     fig.update_layout(
-        title_text='Handel music data',
+        title_text=title,
         xaxis_title_text='Time in seconds',
         yaxis_title_text='Amplitude',
     )
     pio.write_html(fig, path)
+
+
+def load_wav_file(wav_filename: str, title: str, plots_dir_path: str, 
+    plot_filename: str) -> np.ndarray:
+    """
+    Loads a wav file, saves it locally and plots it.
+    """
+
+    # Load wav file from Amazon S3.
+    remote_url = S3_URL+wav_filename
+    local_path = utils.download_remote_data_file(remote_url)
+    # sample_rate is measurements per second.
+    (sample_rate, wav_data) = read(local_path)
+
+    # 65536 = 2^16. 
+    # Samples in a wav file have 16 bits, so we scale the amplitudes to be 
+    # between 0 and 1.
+    wav_data = wav_data/65536
+
+    plot_wav_data(sample_rate, wav_data, title, plots_dir_path, plot_filename)
+
+    return (sample_rate, wav_data)
+
+
+def get_gaussian_filter(b: float, b_list: np.ndarray, 
+    sigma: float) -> np.ndarray:
+    """
+    Returns the values of a Gaussian filter centered at b, with standard 
+    deviation sigma.
+    """
+
+    a = 1/(2*sigma**2)
+    return np.exp(-a*(b_list-b)**2)
+
+
+def get_box_filter(b: float, b_list: np.ndarray, width: float) -> np.ndarray:
+    """
+    Returns the values of a box function filter centered on b, with 
+    specified width.
+    """
+
+    return np.heaviside(width/2-np.abs(b_list-b), 1)
+
+
+def get_mexican_hat_filter(b: float, b_list: np.ndarray,
+    sigma: float) -> np.ndarray:
+
+    return (1-((b_list-b)/sigma)**2) * np.exp(-(b_list-b)**2/(2*sigma**2))
 
 
 def plot_spectrograms(spectrograms: List[np.ndarray], plot_x: List[np.ndarray], 
@@ -97,173 +127,302 @@ def plot_spectrograms(spectrograms: List[np.ndarray], plot_x: List[np.ndarray],
     pio.write_html(fig, path)
 
 
+def plot_filters(filters: List[np.ndarray], plot_x: List[np.ndarray], 
+    plot_titles: List[str], dirname: str, filename: str) -> None:
+    """
+    Plots a list of filters.
+    """
+
+    print(f'Plotting filters...')
+
+    path = os.path.join(dirname, filename)
+
+    rows = len(filters)
+    fig = make_subplots(rows=rows, cols=1, subplot_titles=plot_titles)
+    for row in range(rows):
+        fig.add_trace(
+            go.Scatter(
+                x=plot_x[row],
+                y=filters[row],
+            ),
+            col=1,
+            row=row+1,
+        )
+    fig.update_yaxes(
+        title_text='Filter value',
+    )
+    fig.update_xaxes(
+        title_text='Time (t)',
+    )
+    fig.update_traces(
+        line_color=COLOR1,
+    )
+    fig.update_layout(
+        showlegend=False,
+    )
+    pio.write_html(fig, path)
+
+
+def subsample_data(sample_rate: float, data: np.ndarray, num_samples: 
+    int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Takes num_samples samples out of the input data. Returns the sampled
+    data, corresponding time stamps, and corresponding frequencies.
+    """
+
+    max_time = len(data)/sample_rate
+
+    # Subsample the data.
+    num_samples = 200
+    sampled_data = data[::len(data)//num_samples]
+
+    # Get time steps for subsampled data.
+    t_list = np.linspace(0, max_time, len(sampled_data))
+
+    # Get frequencies for subsampled data.
+    omega_points = np.linspace(-num_samples/2, num_samples/2, num_samples+1)[0:-1]
+    omega_list = (2 * np.pi)/max_time * omega_points
+
+    return (sampled_data, t_list, omega_list)
+
+
 def try_different_gabor_widths(sample_rate: float, 
-    data: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray], 
-    List[np.ndarray], List[str]]:
+    data: np.ndarray, dirname: str, filter_filename: str,
+    spectrogram_filename: str) -> None:
     """
     Filters the temporal data using Gaussian Gabor filter with different
     widths, and transforms the result using FFT.
     """
 
-    max_time = len(data)/sample_rate
-
-    # Subsample the data.
+    # Number of samples we want to get from the original data.
     num_samples = 200
-    sampled_data = data[::len(data)//num_samples]
-
-    # Time steps.
-    b_list = np.linspace(0, max_time, len(sampled_data))
+    # Subsample the data.
+    (sampled_data, t_list, omega_list) = subsample_data(sample_rate, 
+        data, num_samples)
 
     # Gaussian filter standard deviations.
     sigma_list = [0.1, 0.3, 0.7]
 
+    # Lists used to plot the spectrograms and filters.
     spectrograms = []
-    plot_x = []
-    plot_y = []
-    plot_titles = []
+    spectrograms_x = []
+    spectrograms_y = []
+    spectrograms_titles = []
+    filters = []
+    filters_x = []
+    filters_titles = []
 
     # For each Gaussian filter width:
     for sigma in sigma_list:
-        spectrogram = np.empty((len(b_list), len(b_list)))
-        a = 1/(2*sigma**2)
+        spectrogram = np.empty((len(t_list), len(t_list)))
         # For each time step, slide the Gabor filter so that it's centered at 
         # the desired time, apply it to the function in time domain, and 
         # transform the result using FFT.
-        for (j, b) in enumerate(b_list):
-            g = np.exp(-a*(b_list-b)**2)
+        for (j, b) in enumerate(t_list):
+            g = get_gaussian_filter(b, t_list, sigma)
             ug = sampled_data * g
             ugt = np.fft.fftshift(np.fft.fft(ug))
             spectrogram[:, j] = utils.normalize(ugt)
 
         spectrograms.append(spectrogram)
+        spectrograms_x.append(t_list)
+        spectrograms_y.append(omega_list)
+        spectrograms_titles.append(f'Spectrogram using Gabor Gaussian filter with standard deviation = {sigma}')
 
-        plot_x.append(b_list)
+        # Get a Gaussian filter centered in the middle.
+        g = get_gaussian_filter(t_list[len(t_list)//2], t_list, sigma)
+        filters.append(g)
+        filters_x.append(t_list)
+        filters_titles.append(f'Gaussian filter with standard deviation = {sigma}')
 
-        omega_points = np.linspace(-num_samples/2, num_samples/2, num_samples+1)[0:-1]
-        omega_shifted = (2 * np.pi)/max_time * omega_points
-        plot_y.append(omega_shifted)
-
-        plot_titles.append(f'Spectrogram using Gabor Gaussian filter with standard deviation = {sigma}')
-
-    return (spectrograms, plot_x, plot_y, plot_titles)
+    plot_spectrograms(spectrograms, spectrograms_x, spectrograms_y, 
+        spectrograms_titles, dirname, spectrogram_filename)
+    plot_filters(filters, filters_x, filters_titles, dirname, filter_filename)
 
 
 def try_different_gabor_timesteps(sample_rate: float, 
-    data: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray], 
-    List[np.ndarray], List[str]]:
+    data: np.ndarray, dirname: str, spectrogram_filename: str) -> None:
     """
     Filters the temporal data using a Gaussian Gabor filter by sliding it
     with different timesteps, and transforms the result using FFT.
     """
 
-    max_time = len(data)/sample_rate
-
+    # Number of points to subsample from the original data.
     num_samples_list = [100, 400, 800]
 
+    # Lists used to plot the spectrograms.
     spectrograms = []
-    plot_x = []
-    plot_y = []
-    plot_titles = []
+    spectrograms_x = []
+    spectrograms_y = []
+    spectrograms_titles = []
 
     for num_samples in num_samples_list:
         # Subsample the data.
-        sampled_data = data[::len(data)//num_samples]
+        (sampled_data, t_list, omega_list) = subsample_data(sample_rate, 
+            data, num_samples)
 
-        # Time steps.
-        b_list = np.linspace(0, max_time, len(sampled_data))
-
-        # Gaussian filter standard deviations.
-        sigma = 0.1
-
-        spectrogram = np.empty((len(b_list), len(b_list)))
-
-        a = 1/(2*sigma**2)
+        spectrogram = np.empty((len(t_list), len(t_list)))
         # For each time step, slide the Gabor filter so that it's centered at 
         # the desired time, apply it to the function in time domain, and 
         # transform the result using FFT.
-        for (j, b) in enumerate(b_list):
-            g = np.exp(-a*(b_list-b)**2)
+        for (j, b) in enumerate(t_list):
+            g = get_gaussian_filter(b, t_list, sigma=0.1)
             ug = sampled_data * g
             ugt = np.fft.fftshift(np.fft.fft(ug))
             spectrogram[:, j] = utils.normalize(ugt)
 
         spectrograms.append(spectrogram)
+        spectrograms_x.append(t_list)
+        spectrograms_y.append(omega_list)
+        spectrograms_titles.append(f'Spectrogram using Gabor Gaussian filter and {num_samples} time steps')
 
-        plot_x.append(b_list)
-        omega_points = np.linspace(-num_samples/2, num_samples/2, num_samples+1)[0:-1]
-        omega_shifted = (2 * np.pi)/max_time * omega_points
-        plot_y.append(omega_shifted)
-
-        plot_titles.append(f'Spectrogram using Gabor Gaussian filter and {num_samples} time steps')
-
-    return (spectrograms, plot_x, plot_y, plot_titles)
+    plot_spectrograms(spectrograms, spectrograms_x, spectrograms_y, 
+        spectrograms_titles, dirname, spectrogram_filename)
 
 
 def try_different_gabor_functions(sample_rate: float, 
-    data: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray], 
-    List[np.ndarray], List[str]]:
+    data: np.ndarray, dirname: str, filter_filename: str,
+    spectrogram_filename: str) -> None:
     """
     Filters the temporal data using different Gabor filters, and transforms 
     the result using FFT.
     """
 
-    max_time = len(data)/sample_rate
-
-    # Subsample the data.
+    # Number of samples we want to get from the original data.
     num_samples = 200
-    sampled_data = data[::len(data)//num_samples]
-
-    # Time steps.
-    b_list = np.linspace(0, max_time, len(sampled_data))
+    # Subsample the data.
+    (sampled_data, t_list, omega_list) = subsample_data(sample_rate, 
+        data, num_samples)
 
     # Filter 1: Gaussian filter.
-    sigma = 0.1
-    a = 1/(2*sigma**2)
-    gaussian = lambda b: np.exp(-a*(b_list-b)**2)
-
+    gaussian = lambda b: get_gaussian_filter(b, t_list, sigma=0.1)
     # Filter 2: Box function.
-    width = 1
-    box_function = lambda b: np.heaviside(width/2-np.abs(b_list-b), 1)
-
+    box_function = lambda b: get_box_filter(b, t_list, width=1)
     # Filter 3: Mexican hat function.
-    sigma2 = 0.1
-    mexican_hat_function = lambda b: (1-((b_list-b)/sigma2)**2) * np.exp(-(b_list-b)**2/(2*sigma2**2))
-
+    mexican_hat_function = lambda b: get_mexican_hat_filter(b, t_list, sigma=0.1)
     # List of Gabor filters.
     g_list = [
         gaussian,
         box_function,
         mexican_hat_function
     ]
+    # List of Gabor filter names (for plotting).
     filter_name_list = ['Gaussian', 'Box function', 'Mexican hat']
 
+    # Lists used to plot the spectrograms and filters.
     spectrograms = []
-    plot_x = []
-    plot_y = []
-    plot_titles = []
+    spectrograms_x = []
+    spectrograms_y = []
+    spectrograms_titles = []
+    filters = []
+    filters_x = []
+    filters_titles = []
 
     for (i, g) in enumerate(g_list):
-        spectrogram = np.empty((len(b_list), len(b_list)))
-
+        spectrogram = np.empty((len(t_list), len(t_list)))
         # For each time step, slide the Gabor filter so that it's centered at 
         # the desired time, apply it to the function in time domain, and 
         # transform the result using FFT.
-        for (j, b) in enumerate(b_list):
+        for (j, b) in enumerate(t_list):
             ug = sampled_data * g(b)
             ugt = np.fft.fftshift(np.fft.fft(ug))
             spectrogram[:, j] = utils.normalize(ugt)
 
         spectrograms.append(spectrogram)
+        spectrograms_x.append(t_list)
+        spectrograms_y.append(omega_list)
+        spectrograms_titles.append(f'Spectrogram using {filter_name_list[i]} filter')
 
-        plot_x.append(b_list)
+        # Get a filter centered in the middle.
+        filters.append(g(t_list[len(t_list)//2]))
+        filters_x.append(t_list)
+        filters_titles.append(f'{filter_name_list[i]} filter')
 
-        omega_points = np.linspace(-num_samples/2, num_samples/2, num_samples+1)[0:-1]
-        omega_shifted = (2 * np.pi)/max_time * omega_points
-        plot_y.append(omega_shifted)
+    plot_spectrograms(spectrograms, spectrograms_x, spectrograms_y, 
+        spectrograms_titles, dirname, spectrogram_filename)
+    plot_filters(filters, filters_x, filters_titles, dirname, filter_filename)
 
-        plot_titles.append(f'Spectrogram using {filter_name_list[i]} filter')
 
-    return (spectrograms, plot_x, plot_y, plot_titles)
+def part1(plots_dir_path: str) -> None:
+    """
+    Analyzes music by Handel.
+    """
+
+    (handel_sample_rate, handel_data) = load_wav_file(
+        'handel.wav', 'Handel music data',
+        plots_dir_path, 
+        '1_handel_data.html')
+    try_different_gabor_widths(handel_sample_rate, handel_data, 
+        plots_dir_path, 
+        '2_gaussian_filters.html', 
+        '3_spectrograms_different_widths.html')
+    try_different_gabor_timesteps(handel_sample_rate, handel_data,
+        plots_dir_path, 
+        '4_spectrograms_different_timesteps.html')
+    try_different_gabor_functions(handel_sample_rate, handel_data, 
+        plots_dir_path, 
+        '5_different_filters.html', 
+        '6_spectrograms_gabor_functions.html')
+
+
+def produce_spectrograms(sample_rates: List, data_list: List, dirname: str, 
+    filename: str) -> None:
+    """
+    Produces and plots spectrograms for two versions of 'Mary had a little 
+    lamb', on piano and recorder.
+    """
+
+    # Number of samples we want to get from the original data.
+    num_samples = 200
+    # Standard deviation for Gaussian filter.
+    sigma = 0.1
+    # Lists used to plot the spectrograms.
+    spectrograms = []
+    spectrograms_x = []
+    spectrograms_y = []
+
+    for (i, data) in enumerate(data_list):
+        sample_rate = sample_rates[i]
+        (sampled_data, t_list, omega_list) = subsample_data(sample_rate, 
+            data, num_samples)
+
+        spectrogram = np.empty((len(t_list), len(t_list)))
+        # For each time step, slide the Gabor filter so that it's centered at 
+        # the desired time, apply it to the function in time domain, and 
+        # transform the result using FFT.
+        for (j, b) in enumerate(t_list):
+            g = get_gaussian_filter(b, t_list, sigma)
+            ug = sampled_data * g
+            ugt = np.fft.fftshift(np.fft.fft(ug))
+            spectrogram[:, j] = utils.normalize(ugt)
+
+        spectrograms.append(spectrogram)
+        spectrograms_x.append(t_list)
+        spectrograms_y.append(omega_list)
+
+    spectrograms_titles = ['Spectrogram for "Mary had a little lamb" on piano', 
+        'Spectrogram for "Mary had a little lamb" on recorder']
+
+    plot_spectrograms(spectrograms, spectrograms_x, spectrograms_y, 
+        spectrograms_titles, dirname, filename)
+
+
+def part2(plots_dir_path: str) -> None:
+    """
+    Analyzes the song 'Mary had a little lamb'.
+    """
+    
+    (mary1_sample_rate, mary1_data) = load_wav_file(
+        'music1.wav', 'Mary had a little lamb - piano',
+        plots_dir_path, 
+        '7_mary1_data.html')
+    (mary2_sample_rate, mary2_data) = load_wav_file(
+        'music2.wav', 'Mary had a little lamb - recorder',
+        plots_dir_path, 
+        '8_mary2_data.html')
+    produce_spectrograms([mary1_sample_rate, mary2_sample_rate], [mary1_data, 
+        mary2_data], plots_dir_path, 
+        '9_mary_spectrograms.html')
 
 
 def main() -> None:
@@ -271,22 +430,10 @@ def main() -> None:
     Main program.
     """
         
-    # Part 1
-    (sample_rate, handel_data) = load_handel_music()
     plots_dir_path = utils.find_or_create_dir(PLOTS_FOLDER)
-    plot_handel_data(sample_rate, handel_data, plots_dir_path, '1_handel_data.html')
-    (spectrograms, plot_x, plot_y, 
-        plot_titles) = try_different_gabor_widths(sample_rate, handel_data)
-    plot_spectrograms(spectrograms, plot_x, plot_y, plot_titles, 
-        plots_dir_path, '2_spectrograms_different_widths.html')
-    (spectrograms, plot_x, plot_y, 
-        plot_titles) = try_different_gabor_timesteps(sample_rate, handel_data)
-    plot_spectrograms(spectrograms, plot_x, plot_y, plot_titles, 
-        plots_dir_path, '3_spectrograms_different_timesteps.html')
-    (spectrograms, plot_x, plot_y, 
-        plot_titles) = try_different_gabor_functions(sample_rate, handel_data)
-    plot_spectrograms(spectrograms, plot_x, plot_y, plot_titles, 
-        plots_dir_path, '4_spectrograms_gabor_functions.html')
+
+    part1(plots_dir_path)
+    part2(plots_dir_path)
 
 
 if __name__ == '__main__':
