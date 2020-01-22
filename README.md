@@ -1,4 +1,4 @@
-# Denoising 3D scanned data
+# Gabor transforms
 
 *Technologies:* Python, NumPy, Plotly. <br>
 *Topics:* time-series, Gabor transform. <br>
