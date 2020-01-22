@@ -6,8 +6,8 @@
 ## Description
 
 <p float="left">
-  <img src="docs/mary_spectrograms.png?raw=true" width="450" />
-  <img src="docs/zoomed_filtered_spectrograms.png?raw=true" width="450" />
+  <img src="docs/mary_spectrograms.png?raw=true" width="400" />
+  <img src="docs/zoomed_filtered_spectrograms.png?raw=true" width="400" />
 </p>
 
 You can find more details in the <a href="">report</a> for this project.
