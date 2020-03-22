@@ -1,13 +1,13 @@
 # Gabor transforms
 
 *Technologies:* Python, NumPy, Plotly. <br>
-*Topics:* time-series, Fourier transform, Gabor transform, spectrogram. <br>
+*Topics:* Gabor transform, Fourier transform, spectrogram, signal processing, time-series. <br>
 
 ## Description
 
 <p float="left">
-  <img src="readme_files/mary_spectrograms.png?raw=true" width="400" />
-  <img src="readme_files/zoomed_filtered_spectrograms.png?raw=true" width="400" />
+  <img src="https://github.com/bstollnitz/gabor-transforms/blob/master/readme_files/mary_spectrograms.png?raw=true" width="400" />
+  <img src="https://github.com/bstollnitz/gabor-transforms/blob/master/readme_files/zoomed_filtered_spectrograms.png?raw=true" width="400" />
 </p>
 
 I analyze three audio files in this project. The first file contains music by H{\"a}ndel, and the two other contain the song ``Mary had a little lamb'' played on the piano and recorder. 
